@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Admin · VCF Collector</title>
+  <link rel="icon" href="/favicon.svg" />
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: #0b0d10; color: #e7eaef; }
+    header { padding: 16px 20px; border-bottom: 1px solid #1f2329; display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;}
+    h1 { font-size: 18px; margin: 0; }
+    main { padding: 20px; max-width: 980px; margin: 0 auto; }
+    .card { background: #121519; border: 1px solid #1f2329; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+    label { display:block; font-size: 12px; color:#9aa3af; margin-bottom: 4px; }
+    input, button, textarea { font: inherit; }
+    input[type=text], input[type=password] { width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid #2a2f37; background: #0e1115; color: #e7eaef; }
+    .row { display:flex; gap:8px; flex-wrap: wrap; }
+    .row > * { flex: 1 1 140px; min-width: 0; }
+    button { padding: 10px 14px; border-radius: 8px; border: 1px solid #2a2f37; background: #1b2027; color: #e7eaef; cursor: pointer; }
+    button.primary { background: #2563eb; border-color: #2563eb; }
+    button.danger { background: #b91c1c; border-color: #b91c1c; }
+    button:hover { filter: brightness(1.1); }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { padding: 10px 8px; border-bottom: 1px solid #1f2329; text-align: left; vertical-align: middle; }
+    th { color:#9aa3af; font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em;}
+    .muted { color: #6b7280; font-size: 12px; }
+    .actions { display:flex; gap:6px; }
+    .actions button { padding: 6px 10px; font-size: 12px; }
+    .pill { display:inline-block; padding: 2px 8px; border-radius: 999px; background:#1b2027; font-size:12px; color:#9aa3af;}
+    .toolbar { display:flex; gap:8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px;}
+    .grow { flex: 1 1 200px; }
+    .hidden { display:none; }
+    .status { font-size: 13px; color:#9aa3af; }
+    a { color:#60a5fa; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>🥀 VCF Collector — Admin</h1>
+  <span class="status" id="status">Locked</span>
+</header>
+<main>
+  <section class="card" id="loginCard">
+    <label for="pw">Admin password</label>
+    <div class="row">
+      <input id="pw" type="password" placeholder="Enter admin password" autocomplete="current-password"/>
+      <button class="primary" id="loginBtn">Unlock</button>
+    </div>
+    <p class="muted">Default password is set on the server (env <code>ADMIN_PASSWORD</code>).</p>
+  </section>
+
+  <section class="card hidden" id="suffixCard">
+    <h3 style="margin-top:0">Name suffix</h3>
+    <p class="muted">Appended to every NEW contact's name on creation. Example suffix: <b>🥀</b></p>
+    <div class="row">
+      <input id="suffix" type="text" placeholder="e.g. 🥀 or VCF or PREZZY" />
+      <button class="primary" id="saveSuffix">Save suffix</button>
+    </div>
+  </section>
+
+  <section class="card hidden" id="contactsCard">
+    <div class="toolbar">
+      <strong id="totalLbl">Contacts (0)</strong>
+      <input id="search" class="grow" type="text" placeholder="Search name or phone…" />
+      <button id="refreshBtn">Refresh</button>
+      <button id="downloadBtn">Download .vcf</button>
+      <button class="danger" id="deleteAllBtn">Delete ALL</button>
+    </div>
+    <div style="overflow:auto">
+      <table id="tbl">
+        <thead><tr><th>Name</th><th>Country</th><th>Phone</th><th>Created</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<script>
+let PW = sessionStorage.getItem("admin_pw") || "";
+const $ = (id) => document.getElementById(id);
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    ...opts,
+    headers: { "Content-Type": "application/json", "x-admin-password": PW, ...(opts.headers||{}) },
+  });
+  if (res.status === 401) { logout(); throw new Error("Unauthorized"); }
+  if (!res.ok && res.status !== 204) {
+    const j = await res.json().catch(() => ({}));
+    throw new Error(j.error || ("HTTP " + res.status));
+  }
+  if (res.status === 204) return null;
+  const ct = res.headers.get("content-type") || "";
+  return ct.includes("json") ? res.json() : res.text();
+}
+
+function showLocked() {
+  $("loginCard").classList.remove("hidden");
+  $("suffixCard").classList.add("hidden");
+  $("contactsCard").classList.add("hidden");
+  $("status").textContent = "Locked";
+}
+function showUnlocked() {
+  $("loginCard").classList.add("hidden");
+  $("suffixCard").classList.remove("hidden");
+  $("contactsCard").classList.remove("hidden");
+  $("status").textContent = "Unlocked";
+}
+function logout() {
+  PW = "";
+  sessionStorage.removeItem("admin_pw");
+  showLocked();
+}
+
+$("loginBtn").onclick = async () => {
+  PW = $("pw").value.trim();
+  if (!PW) return;
+  try {
+    await api("/api/admin/contacts");
+    sessionStorage.setItem("admin_pw", PW);
+    showUnlocked();
+    await loadAll();
+  } catch (e) { alert(e.message); }
+};
+
+let allContacts = [];
+
+async function loadAll() {
+  const [{ contacts, total }, { suffix }] = await Promise.all([
+    api("/api/admin/contacts"),
+    api("/api/admin/suffix"),
+  ]);
+  allContacts = contacts;
+  $("suffix").value = suffix || "";
+  render();
+}
+
+function render() {
+  const q = $("search").value.trim().toLowerCase();
+  const filtered = !q ? allContacts : allContacts.filter(c =>
+    (c.name||"").toLowerCase().includes(q) ||
+    (c.phone||"").toLowerCase().includes(q) ||
+    (c.countryCode||"").toLowerCase().includes(q)
+  );
+  $("totalLbl").textContent = `Contacts (${filtered.length}${q?` of ${allContacts.length}`:""})`;
+  const tbody = $("tbl").querySelector("tbody");
+  tbody.innerHTML = "";
+  for (const c of filtered) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${escapeHtml(c.name)}</td>
+      <td><span class="pill">${escapeHtml(c.countryCode)}</span></td>
+      <td>${escapeHtml(c.phone)}</td>
+      <td class="muted">${new Date(c.createdAt).toLocaleString()}</td>
+      <td><div class="actions">
+        <button data-edit="${c.id}">Edit</button>
+        <button class="danger" data-del="${c.id}">Delete</button>
+      </div></td>`;
+    tbody.appendChild(tr);
+  }
+}
+
+function escapeHtml(s){return String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));}
+
+$("tbl").addEventListener("click", async (e) => {
+  const editId = e.target.getAttribute("data-edit");
+  const delId = e.target.getAttribute("data-del");
+  if (editId) {
+    const c = allContacts.find(x => x.id === editId);
+    const name = prompt("Name:", c.name); if (name === null) return;
+    const countryCode = prompt("Country code (e.g. +234):", c.countryCode); if (countryCode === null) return;
+    const phone = prompt("Phone (digits only):", c.phone); if (phone === null) return;
+    try {
+      await api(`/api/admin/contacts/${editId}`, { method: "PATCH", body: JSON.stringify({ name, countryCode, phone }) });
+      await loadAll();
+    } catch (err) { alert(err.message); }
+  }
+  if (delId) {
+    if (!confirm("Delete this contact?")) return;
+    try { await api(`/api/admin/contacts/${delId}`, { method: "DELETE" }); await loadAll(); }
+    catch (err) { alert(err.message); }
+  }
+});
+
+$("search").addEventListener("input", render);
+$("refreshBtn").onclick = loadAll;
+$("downloadBtn").onclick = () => { window.location.href = `/api/admin/contacts/vcf?pw=${encodeURIComponent(PW)}`; };
+$("deleteAllBtn").onclick = async () => {
+  if (!confirm("Delete ALL contacts? This cannot be undone.")) return;
+  if (!confirm("Are you absolutely sure?")) return;
+  try { await api("/api/admin/contacts", { method: "DELETE" }); await loadAll(); }
+  catch (err) { alert(err.message); }
+};
+$("saveSuffix").onclick = async () => {
+  try {
+    const { suffix } = await api("/api/admin/suffix", { method: "PUT", body: JSON.stringify({ suffix: $("suffix").value }) });
+    $("suffix").value = suffix;
+    alert("Suffix saved.");
+  } catch (e) { alert(e.message); }
+};
+
+if (PW) {
+  api("/api/admin/contacts").then(() => { showUnlocked(); loadAll(); }).catch(() => showLocked());
+} else showLocked();
+</script>
+</body>
+</html>
