@@ -1,0 +1,16 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "server.js",
+      "use": "@vercel/node",
+      "config": { "includeFiles": ["public/**", "data/**"] }
+    }
+  ],
+  "routes": [
+    { "src": "/assets/(.*)", "dest": "/public/assets/$1" },
+    { "src": "/favicon.svg", "dest": "/public/favicon.svg" },
+    { "src": "/opengraph.jpg", "dest": "/public/opengraph.jpg" },
+    { "src": "/(.*)", "dest": "/server.js" }
+  ]
+}
